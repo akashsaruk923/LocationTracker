@@ -8,3 +8,4 @@ appsettings.*.local.json
 *.log
 current-url.txt
 logs/
+ngrok-domain.txt

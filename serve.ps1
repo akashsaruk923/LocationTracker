@@ -1,20 +1,23 @@
 <#
-  Location Tracker - keep the app + a public link running.
-
-  Starts the .NET app (against your local SQL Server) and a Cloudflare quick
-  tunnel, writes the current public URL to  current-url.txt , and restarts
-  either one if it stops. Runs until you close it / log off.
+  Location Tracker - keep the app + a public link running, and restart either
+  one if it stops. Runs until you close it / log off.
 
   Registered as a logon scheduled task by  install-task.ps1  so it survives
-  reboots. The trycloudflare URL changes on every (re)start - always read the
-  latest from current-url.txt.
+  reboots without a terminal open.
+
+  Public link:
+    * If  ngrok-domain.txt  exists (one line, e.g. akash-loc.ngrok-free.app) and
+      ngrok is on PATH with an authtoken configured -> that FIXED URL is used.
+    * Otherwise a Cloudflare quick tunnel is used (random URL, changes each run).
+  The live URL is always written to  current-url.txt .
 #>
 
 $ErrorActionPreference = 'Stop'
-$root     = Split-Path -Parent $MyInvocation.MyCommand.Path
-$appUrl   = 'http://localhost:5080'
-$urlFile  = Join-Path $root 'current-url.txt'
-$logDir   = Join-Path $root 'logs'
+$root       = Split-Path -Parent $MyInvocation.MyCommand.Path
+$appUrl     = 'http://localhost:5080'
+$urlFile    = Join-Path $root 'current-url.txt'
+$domainFile = Join-Path $root 'ngrok-domain.txt'
+$logDir     = Join-Path $root 'logs'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
 function Test-App {
@@ -31,8 +34,25 @@ function Start-App {
         -RedirectStandardError  (Join-Path $logDir 'app.err.log') -PassThru
 }
 
+function Use-Ngrok {
+    if (-not (Test-Path $domainFile)) { return $false }
+    return [bool](Get-Command ngrok -ErrorAction SilentlyContinue)
+}
+
 function Start-Tunnel {
-    Write-Host "[tunnel] starting..."
+    if (Use-Ngrok) {
+        $domain = (Get-Content $domainFile -Raw).Trim()
+        Write-Host "[tunnel] ngrok -> https://$domain"
+        $p = Start-Process -FilePath 'ngrok' `
+            -ArgumentList 'http',"--url=$domain",'5080','--log=stdout' `
+            -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logDir 'tunnel.log') `
+            -RedirectStandardError (Join-Path $logDir 'tunnel.err.log') -PassThru
+        Set-Content -Path $urlFile -Value "https://$domain" -Encoding utf8
+        Write-Host "[tunnel] PUBLIC URL: https://$domain  (fixed)"
+        return $p
+    }
+
+    Write-Host "[tunnel] cloudflare quick tunnel (random URL)"
     $out = Join-Path $logDir 'tunnel.log'
     if (Test-Path $out) { Remove-Item $out -Force }
     $p = Start-Process -FilePath 'cloudflared' `
@@ -50,13 +70,11 @@ function Start-Tunnel {
     if ($url) {
         Set-Content -Path $urlFile -Value $url -Encoding utf8
         Write-Host "[tunnel] PUBLIC URL: $url  (saved to current-url.txt)"
-    } else {
-        Write-Host "[tunnel] could not read a URL from cloudflared output"
     }
     $p
 }
 
-$app    = Start-App
+$app = Start-App
 1..30 | ForEach-Object { if (-not (Test-App)) { Start-Sleep 1 } }
 $tunnel = Start-Tunnel
 

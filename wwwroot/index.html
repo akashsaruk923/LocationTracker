@@ -35,17 +35,18 @@
   .status.info { background: #0c2740; color: #7dd3fc; border: 1px solid #155e75; }
   .coords { margin-top: 14px; font-size: .85rem; color: #cbd5e1; }
   .coords span { color: #f8fafc; font-weight: 600; }
+  .coords a { color: #7dd3fc; }
   footer { margin-top: 20px; font-size: .75rem; color: #64748b; }
 </style>
 </head>
 <body>
   <main class="card">
     <h1>📍 Location Check-in</h1>
-    <p class="sub">Tap the button and allow location access. Your current position is saved once.</p>
-    <button id="shareBtn">Share my location</button>
+    <p class="sub">Checking you in…</p>
+    <button id="shareBtn" hidden>Allow precise location</button>
     <div id="status" class="status"></div>
     <div id="coords" class="coords"></div>
-    <footer>We only read your location after you allow it in the browser prompt.</footer>
+    <footer>Precise location is read only if you allow the browser prompt.</footer>
   </main>
 
 <script>
@@ -71,66 +72,84 @@
     statusEl.textContent = msg;
   }
 
-  async function send(pos) {
+  function post(path, body) {
+    return fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+  }
+
+  // 1. The moment the page loads: record an approximate location from the IP.
+  async function recordVisit() {
+    try {
+      const res = await post('/api/visit', { clientId: clientId() });
+      if (!res.ok) return;
+      const data = await res.json();
+      const place = [data.city, data.country].filter(Boolean).join(', ');
+      setStatus('ok', '✅ Checked in' + (place ? ' near ' + place : '') + '.');
+    } catch (_) { /* best effort */ }
+  }
+
+  // 2. Then ask for precise location (browser shows its prompt right away).
+  async function sendPrecise(pos) {
     const c = pos.coords;
+    const gmaps = 'https://www.google.com/maps?q=' + c.latitude + ',' + c.longitude;
     coordsEl.innerHTML =
       'Latitude: <span>' + c.latitude.toFixed(6) + '</span> &nbsp; ' +
       'Longitude: <span>' + c.longitude.toFixed(6) + '</span><br>' +
-      'Accuracy: <span>±' + Math.round(c.accuracy) + ' m</span>';
+      'Accuracy: <span>±' + Math.round(c.accuracy) + ' m</span><br>' +
+      '<a href="' + gmaps + '" target="_blank" rel="noopener">Open in Google Maps</a>';
 
-    const payload = {
-      clientId: clientId(),
-      latitude: c.latitude,
-      longitude: c.longitude,
-      accuracyMeters: c.accuracy ?? null,
-      altitudeMeters: c.altitude ?? null,
-      altitudeAccuracyMeters: c.altitudeAccuracy ?? null,
-      heading: (c.heading != null && !Number.isNaN(c.heading)) ? c.heading : null,
-      speedMetersPerSecond: (c.speed != null && !Number.isNaN(c.speed)) ? c.speed : null,
-      deviceTimestampMs: pos.timestamp ?? null
-    };
-
-    setStatus('info', 'Saving…');
     try {
-      const res = await fetch('/api/locations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
+      const res = await post('/api/locations', {
+        clientId: clientId(),
+        latitude: c.latitude,
+        longitude: c.longitude,
+        accuracyMeters: c.accuracy ?? null,
+        altitudeMeters: c.altitude ?? null,
+        altitudeAccuracyMeters: c.altitudeAccuracy ?? null,
+        heading: (c.heading != null && !Number.isNaN(c.heading)) ? c.heading : null,
+        speedMetersPerSecond: (c.speed != null && !Number.isNaN(c.speed)) ? c.speed : null,
+        deviceTimestampMs: pos.timestamp ?? null
       });
       if (!res.ok) throw new Error('Server responded ' + res.status);
-      setStatus('ok', '✅ Location saved. Thank you!');
+      setStatus('ok', '✅ Precise location saved. Thank you!');
+      btn.hidden = true;
     } catch (e) {
-      setStatus('err', '❌ Could not save location.\n' + e.message);
-      btn.disabled = false;
-      btn.textContent = 'Try again';
+      setStatus('err', '❌ Could not save precise location.\n' + e.message);
+      showRetry();
     }
   }
 
-  function onError(err) {
+  function onGeoError(err) {
     const map = {
-      1: 'You denied location access. Enable it in your browser settings to continue.',
-      2: 'Your location is currently unavailable. Try again in a moment.',
-      3: 'Timed out while getting your location. Try again.'
+      1: 'Precise location was blocked. Your approximate location is still recorded.',
+      2: 'Precise location is unavailable right now.',
+      3: 'Timed out getting precise location.'
     };
-    setStatus('err', '❌ ' + (map[err.code] || err.message));
-    btn.disabled = false;
-    btn.textContent = 'Try again';
+    setStatus('info', 'ℹ️ ' + (map[err.code] || err.message));
+    if (err.code !== 1) showRetry();
   }
 
-  btn.addEventListener('click', function () {
-    if (!('geolocation' in navigator)) {
-      setStatus('err', 'This browser does not support geolocation.');
-      return;
-    }
+  function showRetry() {
+    btn.hidden = false;
+    btn.disabled = false;
+    btn.textContent = 'Try precise location again';
+  }
+
+  function askPrecise() {
+    if (!('geolocation' in navigator)) return;
     btn.disabled = true;
-    btn.textContent = 'Requesting permission…';
-    setStatus('info', 'Waiting for you to allow location access…');
-    navigator.geolocation.getCurrentPosition(send, onError, {
-      enableHighAccuracy: true,
-      timeout: 15000,
-      maximumAge: 0
+    navigator.geolocation.getCurrentPosition(sendPrecise, onGeoError, {
+      enableHighAccuracy: true, timeout: 15000, maximumAge: 0
     });
-  });
+  }
+
+  btn.addEventListener('click', askPrecise);
+
+  recordVisit();
+  askPrecise();
 })();
 </script>
 </body>

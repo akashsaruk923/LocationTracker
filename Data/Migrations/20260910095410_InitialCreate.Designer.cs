@@ -12,7 +12,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace LocationTracker.Api.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20260910094759_InitialCreate")]
+    [Migration("20260910095410_InitialCreate")]
     partial class InitialCreate
     {
         /// <inheritdoc />
@@ -42,16 +42,28 @@ namespace LocationTracker.Api.Data.Migrations
                     b.Property<double?>("AltitudeMeters")
                         .HasColumnType("double precision");
 
+                    b.Property<string>("City")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
                     b.Property<string>("ClientId")
                         .IsRequired()
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Country")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
 
                     b.Property<DateTimeOffset>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTimeOffset?>("DeviceTimestampUtc")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("GoogleMapsUrl")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
 
                     b.Property<double?>("Heading")
                         .HasColumnType("double precision");
@@ -60,11 +72,22 @@ namespace LocationTracker.Api.Data.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
 
-                    b.Property<double>("Latitude")
+                    b.Property<double?>("Latitude")
                         .HasColumnType("double precision");
 
-                    b.Property<double>("Longitude")
+                    b.Property<double?>("Longitude")
                         .HasColumnType("double precision");
+
+                    b.Property<string>("Region")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)")
+                        .HasDefaultValue("gps");
 
                     b.Property<double?>("SpeedMetersPerSecond")
                         .HasColumnType("double precision");

@@ -1,16 +1,24 @@
 # Location Tracker
 
-A tiny web app: a visitor opens the page, taps **Share my location**, and the
-browser shows its native permission prompt. Only after they *allow* it, the
-device's current position is POSTed to the API and stored in the database.
+A tiny web app. The instant a visitor opens the link, an **approximate
+(city-level) location is saved from their IP address** - no permission needed.
+The page then immediately asks for **precise** location; if the visitor allows
+the browser prompt, the exact device position is saved too.
 
 ```
-Browser (getCurrentPosition)  ->  POST /api/locations  ->  EF Core  ->  PostgreSQL
-        page: wwwroot/index.html          Program.cs        AppDbContext   LocationPings
+page load ─┬─> POST /api/visit     ─> IP lookup (ipwho.is) ─┐
+           │                                                 ├─> EF Core ─> PostgreSQL
+           └─> getCurrentPosition ──> POST /api/locations ──┘        (LocationPings)
 ```
 
-Nothing is read or sent until the user grants permission. No background or
-repeated tracking - one position per button press.
+Every row carries a ready-to-open `GoogleMapsUrl`. Rows are tagged
+`Source = "ip"` (approximate, automatic) or `Source = "gps"` (precise, consented).
+
+> A browser **cannot** hand over precise GPS without the visitor accepting the
+> permission prompt - that is a hard security rule of the web platform. What the
+> page does is fire that prompt automatically on load (no button), and on repeat
+> visits where permission was already granted it saves silently. The IP-based
+> row is the fallback that is always saved.
 
 ## Stack
 
@@ -24,9 +32,12 @@ repeated tracking - one position per button press.
 | column | notes |
 | --- | --- |
 | `Id` | bigint identity PK |
+| `Source` | `"ip"` (approximate, automatic) or `"gps"` (precise, consented) |
 | `ClientId` | random id kept in the browser's localStorage (groups repeat visits) |
-| `Latitude`, `Longitude` | required |
-| `AccuracyMeters`, `AltitudeMeters`, `AltitudeAccuracyMeters`, `Heading`, `SpeedMetersPerSecond` | optional, as reported by the browser |
+| `Latitude`, `Longitude` | nullable - an IP lookup can fail, a denied prompt leaves them empty |
+| `GoogleMapsUrl` | `https://www.google.com/maps?q=<lat>,<lng>` for the row |
+| `City`, `Region`, `Country` | from the IP lookup |
+| `AccuracyMeters`, `AltitudeMeters`, `AltitudeAccuracyMeters`, `Heading`, `SpeedMetersPerSecond` | GPS rows only, as reported by the browser |
 | `DeviceTimestampUtc` | when the browser fixed the position |
 | `UserAgent`, `IpAddress` | request metadata (IP taken from `CF-Connecting-IP` / `X-Forwarded-For` when proxied) |
 | `CreatedAtUtc` | server insert time |
@@ -37,7 +48,8 @@ repeated tracking - one position per button press.
 | --- | --- | --- |
 | `GET` | `/` | the check-in page |
 | `GET` | `/health` | liveness probe |
-| `POST` | `/api/locations` | store one position (JSON body, see `Dtos/LocationPingRequest`) |
+| `POST` | `/api/visit` | `{ "clientId": "..." }` - save the IP-based approximate location |
+| `POST` | `/api/locations` | precise position (JSON body, see `Dtos/LocationPingRequest`) |
 
 ## Configuration
 
@@ -61,7 +73,8 @@ dotnet run --urls http://localhost:5080
 Open http://localhost:5080, allow location access, then:
 
 ```sql
-SELECT * FROM "LocationPings" ORDER BY "Id" DESC;
+SELECT "Id", "Source", "City", "Country", "Latitude", "Longitude", "GoogleMapsUrl", "CreatedAtUtc"
+FROM "LocationPings" ORDER BY "Id" DESC;
 ```
 
 ## Deploy to Render (free, permanent)

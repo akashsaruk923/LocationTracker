@@ -1,19 +1,29 @@
-# Render Blueprint. In the Render dashboard: New -> Blueprint -> pick this repo.
-# The app needs a SQL Server it can reach from Render's network. Set the
-# connection string in the dashboard (Environment tab) - do NOT commit it.
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# Deploy: Render dashboard > New + > Blueprint > pick this repo > Apply.
+# Provisions a free PostgreSQL and a free Docker web service, wired together.
+
+databases:
+  - name: locationtracker-db
+    plan: free
+    region: singapore
+    databaseName: locationtracker
+    user: locationtracker
+
 services:
   - type: web
-    name: location-tracker
+    name: locationtracker
     runtime: docker
-    dockerfilePath: ./Dockerfile
     plan: free
+    region: singapore
+    dockerfilePath: ./Dockerfile
     healthCheckPath: /health
     autoDeploy: true
     envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: locationtracker-db
+          property: connectionString
       - key: ASPNETCORE_ENVIRONMENT
         value: Production
-      # Set this value in the Render dashboard, marked as secret:
-      #   ConnectionStrings__Default =
-      #   Server=<host>,<port>;Database=LocationTrackerDb;User Id=<user>;Password=<pwd>;Encrypt=True;TrustServerCertificate=True
-      - key: ConnectionStrings__Default
-        sync: false
+      - key: DOTNET_hostBuilder__reloadConfigOnChange
+        value: "false"

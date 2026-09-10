@@ -2,11 +2,11 @@
 
 A tiny web app: a visitor opens the page, taps **Share my location**, and the
 browser shows its native permission prompt. Only after they *allow* it, the
-device's current position is POSTed to the API and stored in **SQL Server**.
+device's current position is POSTed to the API and stored in the database.
 
 ```
-Browser (getCurrentPosition)  ->  POST /api/locations  ->  EF Core  ->  SQL Server
-        page: wwwroot/index.html          Program.cs        AppDbContext   LocationTrackerDb
+Browser (getCurrentPosition)  ->  POST /api/locations  ->  EF Core  ->  PostgreSQL
+        page: wwwroot/index.html          Program.cs        AppDbContext   LocationPings
 ```
 
 Nothing is read or sent until the user grants permission. No background or
@@ -15,7 +15,7 @@ repeated tracking - one position per button press.
 ## Stack
 
 - .NET 9 minimal API
-- EF Core 9 + SQL Server (`Microsoft.EntityFrameworkCore.SqlServer`)
+- EF Core 9 + PostgreSQL (`Npgsql.EntityFrameworkCore.PostgreSQL`)
 - Static HTML/JS front-end (no build step)
 - Migrations applied automatically on startup
 
@@ -28,34 +28,8 @@ repeated tracking - one position per button press.
 | `Latitude`, `Longitude` | required |
 | `AccuracyMeters`, `AltitudeMeters`, `AltitudeAccuracyMeters`, `Heading`, `SpeedMetersPerSecond` | optional, as reported by the browser |
 | `DeviceTimestampUtc` | when the browser fixed the position |
-| `UserAgent`, `IpAddress` | request metadata (IP taken from `CF-Connecting-IP` / `X-Forwarded-For` when tunnelled) |
+| `UserAgent`, `IpAddress` | request metadata (IP taken from `CF-Connecting-IP` / `X-Forwarded-For` when proxied) |
 | `CreatedAtUtc` | server insert time |
-
-## Run locally
-
-Requires the .NET 9 SDK and a reachable SQL Server. The default connection
-string (in `appsettings.json`) points at a local default instance with Windows
-auth and creates the `LocationTrackerDb` database on first run:
-
-```
-Server=localhost;Database=LocationTrackerDb;Trusted_Connection=True;TrustServerCertificate=True;Encrypt=False
-```
-
-```bash
-dotnet run --urls http://localhost:5080
-```
-
-Open http://localhost:5080 and allow location access. Check the data:
-
-```sql
-SELECT * FROM LocationTrackerDb.dbo.LocationPings ORDER BY Id DESC;
-```
-
-Override the database without editing files:
-
-```bash
-setx ConnectionStrings__Default "Server=...;Database=LocationTrackerDb;User Id=...;Password=...;Encrypt=True;TrustServerCertificate=True"
-```
 
 ## Endpoints
 
@@ -65,30 +39,50 @@ setx ConnectionStrings__Default "Server=...;Database=LocationTrackerDb;User Id=.
 | `GET` | `/health` | liveness probe |
 | `POST` | `/api/locations` | store one position (JSON body, see `Dtos/LocationPingRequest`) |
 
-## Publish a public link - local app + Cloudflare quick tunnel
+## Configuration
 
-The browser Geolocation API needs a secure origin (`https` or `localhost`).
-A Cloudflare quick tunnel gives you public HTTPS with no account and no domain,
-and the app keeps writing to your **local** SQL Server:
+Connection string resolution order:
 
-```bash
-# terminal 1
-dotnet run --urls http://localhost:5080
+1. `DATABASE_URL` env var - accepts a libpq URL (`postgres://user:pass@host:port/db`), which is what Render provides.
+2. `ConnectionStrings:Default` (or `ConnectionStrings__Default` env var) - a raw Npgsql key/value string.
 
-# terminal 2
-cloudflared tunnel --url http://localhost:5080
+## Run locally
+
+Requires the .NET 9 SDK and a PostgreSQL server. Default `appsettings.json`:
+
+```
+Host=localhost;Port=5432;Database=locationtracker;Username=postgres;Password=postgres
 ```
 
-`cloudflared` prints a `https://<random>.trycloudflare.com` URL - share that.
-The link lives only while both commands run and changes on restart.
+```bash
+dotnet run --urls http://localhost:5080
+```
 
-## Deploy the app to Render
+Open http://localhost:5080, allow location access, then:
 
-`Dockerfile` + `render.yaml` are included. In the Render dashboard:
-**New -> Blueprint -> this repo**, then set `ConnectionStrings__Default`
-(Environment tab, secret) to a SQL Server that Render can reach over the network.
+```sql
+SELECT * FROM "LocationPings" ORDER BY "Id" DESC;
+```
 
-Render's network cannot reach a SQL Server on your PC unless that port is
-exposed with a **TCP** tunnel (a Cloudflare *named* tunnel needs a domain on
-Cloudflare; quick tunnels are HTTP-only). For a permanent cloud database use
-**Azure SQL Database (free tier)** and paste its connection string.
+## Deploy to Render (free, permanent)
+
+`Dockerfile` + `render.yaml` provision a **free PostgreSQL** and a **free Docker
+web service**, wired together via `DATABASE_URL`.
+
+1. Render dashboard -> **New + -> Blueprint**
+2. Pick the `LocationTracker` repo -> **Apply**
+3. Wait for the build; open the service URL.
+
+Migrations run on startup, so the `LocationPings` table is created automatically.
+The free web service sleeps after ~15 min idle and wakes on the next request.
+
+## Public link without deploying (local app + Cloudflare quick tunnel)
+
+The browser Geolocation API needs a secure origin (`https` or `localhost`).
+
+```bash
+dotnet run --urls http://localhost:5080          # terminal 1
+cloudflared tunnel --url http://localhost:5080    # terminal 2 -> prints an https URL
+```
+
+The tunnel URL lives only while both commands run and changes on restart.

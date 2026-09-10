@@ -13,13 +13,13 @@ if (!string.IsNullOrWhiteSpace(port))
     builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 }
 
-// SQL Server. From ConnectionStrings:Default (appsettings) or the
-// ConnectionStrings__Default environment variable.
-var connectionString = builder.Configuration.GetConnectionString("Default")
-    ?? throw new InvalidOperationException("No 'Default' connection string configured.");
+// PostgreSQL. DATABASE_URL (Render's libpq URL) wins, else ConnectionStrings:Default.
+var rawConnection = builder.Configuration["DATABASE_URL"]
+    ?? builder.Configuration.GetConnectionString("Default")
+    ?? throw new InvalidOperationException("No database connection configured (DATABASE_URL or ConnectionStrings:Default).");
 
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlServer(connectionString));
+    options.UseNpgsql(NormalizePostgres(rawConnection)));
 
 // The public tunnel origin differs from the app origin, so allow the page to call the API.
 builder.Services.AddCors(options => options.AddDefaultPolicy(p =>
@@ -177,3 +177,31 @@ app.MapGet("/api/recent", async (HttpContext ctx, AppDbContext db, IConfiguratio
 });
 
 app.Run();
+
+/// <summary>libpq URL (postgres://user:pass@host:port/db) -> Npgsql key/value string; passes others through.</summary>
+static string NormalizePostgres(string value)
+{
+    if (!value.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase)
+        && !value.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase))
+        return value;
+
+    var uri = new Uri(value);
+    var userInfo = uri.UserInfo.Split(':', 2);
+    var b = new Npgsql.NpgsqlConnectionStringBuilder
+    {
+        Host = uri.Host,
+        Port = uri.IsDefaultPort ? 5432 : uri.Port,
+        Username = Uri.UnescapeDataString(userInfo[0]),
+        Password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : string.Empty,
+        Database = uri.AbsolutePath.TrimStart('/'),
+        SslMode = Npgsql.SslMode.Require,
+    };
+    foreach (var pair in uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+    {
+        var kv = pair.Split('=', 2);
+        if (kv.Length == 2 && kv[0].Equals("sslmode", StringComparison.OrdinalIgnoreCase)
+            && Enum.TryParse<Npgsql.SslMode>(kv[1], true, out var parsed))
+            b.SslMode = parsed;
+    }
+    return b.ConnectionString;
+}

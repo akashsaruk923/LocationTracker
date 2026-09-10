@@ -6,21 +6,20 @@ using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Render (and most PaaS) inject the port to bind on via $PORT.
+// Optional: honour a $PORT if a host injects one.
 var port = Environment.GetEnvironmentVariable("PORT");
 if (!string.IsNullOrWhiteSpace(port))
 {
     builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 }
 
-// Connection string precedence: DATABASE_URL (Render/host convention) >
-// ConnectionStrings:Default (appsettings or ConnectionStrings__Default env var).
-var rawConnection = builder.Configuration["DATABASE_URL"]
-    ?? builder.Configuration.GetConnectionString("Default")
-    ?? throw new InvalidOperationException("No database connection configured (set DATABASE_URL or ConnectionStrings:Default).");
+// SQL Server. From ConnectionStrings:Default (appsettings) or the
+// ConnectionStrings__Default environment variable.
+var connectionString = builder.Configuration.GetConnectionString("Default")
+    ?? throw new InvalidOperationException("No 'Default' connection string configured.");
 
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(NormalizePostgres(rawConnection)));
+    options.UseSqlServer(connectionString));
 
 // The public tunnel origin differs from the app origin, so allow the page to call the API.
 builder.Services.AddCors(options => options.AddDefaultPolicy(p =>
@@ -166,36 +165,3 @@ app.MapGet("/api/recent", async (HttpContext ctx, AppDbContext db, IConfiguratio
 });
 
 app.Run();
-
-/// <summary>
-/// Accepts either a libpq URL (postgres://user:pass@host:port/db, as Render's
-/// DATABASE_URL provides) or an already-formed Npgsql key/value string.
-/// </summary>
-static string NormalizePostgres(string value)
-{
-    if (!value.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase)
-        && !value.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase))
-        return value;
-
-    var uri = new Uri(value);
-    var userInfo = uri.UserInfo.Split(':', 2);
-    var b = new Npgsql.NpgsqlConnectionStringBuilder
-    {
-        Host = uri.Host,
-        Port = uri.IsDefaultPort ? 5432 : uri.Port,
-        Username = Uri.UnescapeDataString(userInfo[0]),
-        Password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : string.Empty,
-        Database = uri.AbsolutePath.TrimStart('/'),
-        SslMode = Npgsql.SslMode.Require,
-    };
-
-    foreach (var pair in uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
-    {
-        var kv = pair.Split('=', 2);
-        if (kv.Length == 2 && kv[0].Equals("sslmode", StringComparison.OrdinalIgnoreCase)
-            && Enum.TryParse<Npgsql.SslMode>(kv[1], true, out var parsed))
-            b.SslMode = parsed;
-    }
-
-    return b.ConnectionString;
-}

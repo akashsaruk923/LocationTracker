@@ -7,7 +7,7 @@ the browser prompt, the exact device position is saved too.
 
 ```
 page load ─┬─> POST /api/visit     ─> IP lookup (ipwho.is) ─┐
-           │                                                 ├─> EF Core ─> PostgreSQL
+           │                                                 ├─> EF Core ─> SQL Server
            └─> getCurrentPosition ──> POST /api/locations ──┘        (LocationPings)
 ```
 
@@ -15,15 +15,15 @@ Every row carries a ready-to-open `GoogleMapsUrl`. Rows are tagged
 `Source = "ip"` (approximate, automatic) or `Source = "gps"` (precise, consented).
 
 > A browser **cannot** hand over precise GPS without the visitor accepting the
-> permission prompt - that is a hard security rule of the web platform. What the
-> page does is fire that prompt automatically on load (no button), and on repeat
-> visits where permission was already granted it saves silently. The IP-based
-> row is the fallback that is always saved.
+> permission prompt - that is a hard security rule of the web platform. The page
+> fires that prompt automatically on load (no button); on repeat visits where
+> permission was already granted it saves silently. The IP-based row is the
+> fallback that is always saved.
 
 ## Stack
 
 - .NET 9 minimal API
-- EF Core 9 + PostgreSQL (`Npgsql.EntityFrameworkCore.PostgreSQL`)
+- EF Core 9 + **SQL Server** (`Microsoft.EntityFrameworkCore.SqlServer`)
 - Static HTML/JS front-end (no build step)
 - Migrations applied automatically on startup
 
@@ -55,49 +55,40 @@ Every row carries a ready-to-open `GoogleMapsUrl`. Rows are tagged
 
 ## Configuration
 
-Connection string resolution order:
-
-1. `DATABASE_URL` env var - accepts a libpq URL (`postgres://user:pass@host:port/db`), which is what Render provides.
-2. `ConnectionStrings:Default` (or `ConnectionStrings__Default` env var) - a raw Npgsql key/value string.
-
-## Run locally
-
-Requires the .NET 9 SDK and a PostgreSQL server. Default `appsettings.json`:
+The connection string comes from `ConnectionStrings:Default` in
+`appsettings.json`, or the `ConnectionStrings__Default` environment variable.
+Default (local SQL Server, Windows auth, DB created on first run):
 
 ```
-Host=localhost;Port=5432;Database=locationtracker;Username=postgres;Password=postgres
+Server=localhost;Database=LocationTrackerDb;Trusted_Connection=True;TrustServerCertificate=True;Encrypt=False
 ```
+
+## Run + publish a public link
+
+The browser Geolocation API needs a secure origin (`https` or `localhost`), and
+the app must reach your SQL Server - so it runs on your machine and is exposed
+with a Cloudflare quick tunnel (public HTTPS, no account, no domain):
 
 ```bash
-dotnet run --urls http://localhost:5080
+# terminal 1 - the app (writes to your local SQL Server)
+dotnet run -c Release --urls http://localhost:5080
+
+# terminal 2 - the public link
+cloudflared tunnel --url http://localhost:5080
 ```
 
-Open http://localhost:5080, allow location access, then:
+`cloudflared` prints a `https://<random>.trycloudflare.com` URL - share that.
+It lives only while both commands run and changes on every restart. For a stable
+URL, run a Cloudflare *named* tunnel (needs a domain on Cloudflare) or host the
+app on a machine that stays on.
+
+Check the data:
 
 ```sql
-SELECT "Id", "Source", "City", "Country", "Latitude", "Longitude", "GoogleMapsUrl", "CreatedAtUtc"
-FROM "LocationPings" ORDER BY "Id" DESC;
+SELECT TOP 50 Id, Source, City, Country, Latitude, Longitude, GoogleMapsUrl, CreatedAtIst
+FROM LocationPings
+ORDER BY Id DESC;
 ```
 
-## Deploy to Render (free, permanent)
-
-`Dockerfile` + `render.yaml` provision a **free PostgreSQL** and a **free Docker
-web service**, wired together via `DATABASE_URL`.
-
-1. Render dashboard -> **New + -> Blueprint**
-2. Pick the `LocationTracker` repo -> **Apply**
-3. Wait for the build; open the service URL.
-
-Migrations run on startup, so the `LocationPings` table is created automatically.
-The free web service sleeps after ~15 min idle and wakes on the next request.
-
-## Public link without deploying (local app + Cloudflare quick tunnel)
-
-The browser Geolocation API needs a secure origin (`https` or `localhost`).
-
-```bash
-dotnet run --urls http://localhost:5080          # terminal 1
-cloudflared tunnel --url http://localhost:5080    # terminal 2 -> prints an https URL
-```
-
-The tunnel URL lives only while both commands run and changes on restart.
+`Dockerfile` is kept for containerised hosting, but note SQL Server itself is not
+included - point `ConnectionStrings__Default` at a reachable SQL Server.

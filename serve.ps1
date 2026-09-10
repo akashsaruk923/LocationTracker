@@ -19,7 +19,11 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
 # --- single instance -------------------------------------------------------
 $mutex = New-Object System.Threading.Mutex($false, 'Global\LocationTrackerServe')
-if (-not $mutex.WaitOne(0)) { Write-Host "another serve.ps1 is already running - exiting"; return }
+try {
+    if (-not $mutex.WaitOne(0)) { Write-Host "another serve.ps1 is already running - exiting"; return }
+} catch [System.Threading.AbandonedMutexException] {
+    Write-Host "took over an abandoned mutex - continuing"
+}
 
 function Find-Exe([string]$name, [string[]]$extra) {
     $c = Get-Command $name -ErrorAction SilentlyContinue
@@ -56,19 +60,27 @@ function Start-Tunnel {
     $useNgrok = $ngrokExe -and (Test-Path $domainFile)
     if ($useNgrok) {
         $domain = (Get-Content $domainFile -Raw).Trim()
-        Write-Host "[tunnel] ngrok -> https://$domain"
-        $p = Start-Process -FilePath $ngrokExe `
-            -ArgumentList 'http',"--url=$domain",'5080','--log=stdout' `
-            -WindowStyle Hidden `
-            -RedirectStandardOutput (Join-Path $logDir 'tunnel.out.log') `
-            -RedirectStandardError  (Join-Path $logDir 'tunnel.err.log') -PassThru
-        Start-Sleep 4
-        if (-not $p.HasExited) {
-            Set-Content -Path $urlFile -Value "https://$domain" -Encoding ascii
-            Write-Host "[tunnel] PUBLIC URL: https://$domain (fixed)"
-            return $p
+        # ngrok free = one agent per endpoint. Kill any stray agent and give the
+        # server session time to expire, or the new one hits ERR_NGROK_334.
+        Get-Process ngrok -ErrorAction SilentlyContinue | ForEach-Object { try { $_.Kill() } catch {} }
+        Start-Sleep 8
+        for ($try = 1; $try -le 6; $try++) {
+            Write-Host "[tunnel] ngrok -> https://$domain (attempt $try)"
+            $p = Start-Process -FilePath $ngrokExe `
+                -ArgumentList 'http',"--url=$domain",'5080','--log=stdout' `
+                -WindowStyle Hidden `
+                -RedirectStandardOutput (Join-Path $logDir 'tunnel.out.log') `
+                -RedirectStandardError  (Join-Path $logDir 'tunnel.err.log') -PassThru
+            Start-Sleep 6
+            if (-not $p.HasExited) {
+                Set-Content -Path $urlFile -Value "https://$domain" -Encoding ascii
+                Write-Host "[tunnel] PUBLIC URL: https://$domain (fixed)"
+                return $p
+            }
+            Write-Host "[tunnel] ngrok exited (likely ERR_NGROK_334) - waiting 30s"
+            Start-Sleep 30
         }
-        Write-Host "[tunnel] ngrok exited immediately - see logs\tunnel.err.log; falling back"
+        Write-Host "[tunnel] ngrok not starting - falling back to cloudflare"
     }
 
     if (-not $cfExe) { Write-Host "[tunnel] no cloudflared found"; return $null }

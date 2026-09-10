@@ -6,3 +6,5 @@ obj/
 .idea/
 appsettings.*.local.json
 *.log
+current-url.txt
+logs/

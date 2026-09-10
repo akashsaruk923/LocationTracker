@@ -20,6 +20,9 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
             entity.Property(p => p.Country).HasMaxLength(128);
             entity.Property(p => p.UserAgent).HasMaxLength(512);
             entity.Property(p => p.IpAddress).HasMaxLength(64);
+            // IST wall-clock columns: store without a timezone so a plain SELECT shows local time.
+            entity.Property(p => p.CreatedAtIst).HasColumnType("timestamp without time zone");
+            entity.Property(p => p.DeviceTimestampIst).HasColumnType("timestamp without time zone");
             entity.HasIndex(p => p.ClientId);
             entity.HasIndex(p => p.CreatedAtUtc);
         });

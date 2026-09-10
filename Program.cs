@@ -57,6 +57,12 @@ static string? MapsUrl(double? lat, double? lng) =>
         ? $"https://www.google.com/maps?q={a.ToString(System.Globalization.CultureInfo.InvariantCulture)},{b.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
         : null;
 
+// India Standard Time is a fixed UTC+5:30 (no DST), so a fixed offset is exact
+// and avoids depending on the OS timezone database inside the container.
+var istOffset = TimeSpan.FromHours(5.5);
+DateTime IstNow() => DateTimeOffset.UtcNow.ToOffset(istOffset).DateTime;
+DateTime? ToIst(DateTimeOffset? utc) => utc?.ToOffset(istOffset).DateTime;
+
 app.MapGet("/health", () => Results.Ok(new { status = "ok", timeUtc = DateTimeOffset.UtcNow }));
 
 // Called by the page the instant it loads. Saves an approximate, city-level
@@ -80,13 +86,14 @@ app.MapPost("/api/visit", async (VisitRequest req, HttpContext ctx, AppDbContext
         UserAgent = UserAgent(ctx),
         IpAddress = ip,
         CreatedAtUtc = DateTimeOffset.UtcNow,
+        CreatedAtIst = IstNow(),
     };
 
     db.LocationPings.Add(ping);
     await db.SaveChangesAsync();
 
     return Results.Created($"/api/locations/{ping.Id}",
-        new { ping.Id, ping.Source, ping.Latitude, ping.Longitude, ping.City, ping.Country, ping.GoogleMapsUrl });
+        new { ping.Id, ping.Source, ping.Latitude, ping.Longitude, ping.City, ping.Country, ping.GoogleMapsUrl, ping.CreatedAtIst });
 });
 
 // Called after the visitor allows the browser location prompt. Precise position.
@@ -117,18 +124,45 @@ app.MapPost("/api/locations", async (LocationPingRequest req, HttpContext ctx, A
         DeviceTimestampUtc = req.DeviceTimestampMs is { } ms
             ? DateTimeOffset.FromUnixTimeMilliseconds(ms)
             : null,
+        DeviceTimestampIst = req.DeviceTimestampMs is { } ms2
+            ? ToIst(DateTimeOffset.FromUnixTimeMilliseconds(ms2))
+            : null,
         City = g.City,
         Region = g.Region,
         Country = g.Country,
         UserAgent = UserAgent(ctx),
         IpAddress = ip,
         CreatedAtUtc = DateTimeOffset.UtcNow,
+        CreatedAtIst = IstNow(),
     };
 
     db.LocationPings.Add(ping);
     await db.SaveChangesAsync();
 
-    return Results.Created($"/api/locations/{ping.Id}", new { ping.Id, ping.CreatedAtUtc, ping.GoogleMapsUrl });
+    return Results.Created($"/api/locations/{ping.Id}", new { ping.Id, ping.CreatedAtIst, ping.GoogleMapsUrl });
+});
+
+// Quick read-back to verify what's stored. Protected by the ADMIN_KEY env var.
+app.MapGet("/api/recent", async (HttpContext ctx, AppDbContext db, IConfiguration cfg) =>
+{
+    var expected = cfg["ADMIN_KEY"];
+    if (string.IsNullOrEmpty(expected) || ctx.Request.Query["key"] != expected)
+        return Results.Unauthorized();
+
+    var rows = await db.LocationPings
+        .OrderByDescending(p => p.Id)
+        .Take(50)
+        .Select(p => new
+        {
+            p.Id, p.Source, p.ClientId,
+            p.Latitude, p.Longitude, p.GoogleMapsUrl,
+            p.City, p.Region, p.Country,
+            p.AccuracyMeters, p.IpAddress,
+            p.CreatedAtIst, p.DeviceTimestampIst,
+        })
+        .ToListAsync();
+
+    return Results.Ok(rows);
 });
 
 app.Run();

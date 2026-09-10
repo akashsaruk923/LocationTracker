@@ -31,8 +31,11 @@ public class LocationPing
     public double? Heading { get; set; }
     public double? SpeedMetersPerSecond { get; set; }
 
-    /// <summary>When the browser fixed the position (from the Geolocation timestamp).</summary>
+    /// <summary>When the browser fixed the position (from the Geolocation timestamp), UTC.</summary>
     public DateTimeOffset? DeviceTimestampUtc { get; set; }
+
+    /// <summary>Same moment as <see cref="DeviceTimestampUtc"/>, as India Standard Time (UTC+5:30) wall-clock.</summary>
+    public DateTime? DeviceTimestampIst { get; set; }
 
     // Filled from the IP lookup (present on "ip" rows, sometimes on "gps" rows too).
     public string? City { get; set; }
@@ -42,5 +45,9 @@ public class LocationPing
     public string? UserAgent { get; set; }
     public string? IpAddress { get; set; }
 
+    /// <summary>Server insert time, UTC (the true instant).</summary>
     public DateTimeOffset CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow;
+
+    /// <summary>Server insert time as India Standard Time (UTC+5:30) wall-clock - the column to read for local time.</summary>
+    public DateTime CreatedAtIst { get; set; }
 }

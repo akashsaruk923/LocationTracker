@@ -1,4 +1,5 @@
 @echo off
-REM Launches serve.ps1 hidden at logon. No admin needed.
-REM Install: copy this file into the folder that opens when you run  shell:startup
+REM Location Tracker - start the app + public tunnel, hidden.
+REM Copied to the Startup folder (as LocationTracker.cmd) with an absolute path
+REM by install-startup.ps1 so it runs at every logon.
 start "" /min powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "%~dp0serve.ps1"

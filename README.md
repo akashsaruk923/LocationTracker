@@ -38,9 +38,10 @@ Every row carries a ready-to-open `GoogleMapsUrl`. Rows are tagged
 | `GoogleMapsUrl` | `https://www.google.com/maps?q=<lat>,<lng>` for the row |
 | `City`, `Region`, `Country` | from the IP lookup |
 | `AccuracyMeters`, `AltitudeMeters`, `AltitudeAccuracyMeters`, `Heading`, `SpeedMetersPerSecond` | GPS rows only, as reported by the browser |
-| `DeviceTimestampUtc` | when the browser fixed the position |
+| `CreatedAtIst` | **server insert time in India Standard Time (UTC+5:30)** - the column to read |
+| `CreatedAtUtc` | same moment in UTC (the true instant) |
+| `DeviceTimestampIst` / `DeviceTimestampUtc` | when the browser fixed the position, IST / UTC |
 | `UserAgent`, `IpAddress` | request metadata (IP taken from `CF-Connecting-IP` / `X-Forwarded-For` when proxied) |
-| `CreatedAtUtc` | server insert time |
 
 ## Endpoints
 
@@ -50,6 +51,7 @@ Every row carries a ready-to-open `GoogleMapsUrl`. Rows are tagged
 | `GET` | `/health` | liveness probe |
 | `POST` | `/api/visit` | `{ "clientId": "..." }` - save the IP-based approximate location |
 | `POST` | `/api/locations` | precise position (JSON body, see `Dtos/LocationPingRequest`) |
+| `GET` | `/api/recent?key=<ADMIN_KEY>` | last 50 rows as JSON; 401 unless the `ADMIN_KEY` env var is set |
 
 ## Configuration
 

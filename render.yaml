@@ -1,0 +1,19 @@
+# Render Blueprint. In the Render dashboard: New -> Blueprint -> pick this repo.
+# The app needs a SQL Server it can reach from Render's network. Set the
+# connection string in the dashboard (Environment tab) - do NOT commit it.
+services:
+  - type: web
+    name: location-tracker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Production
+      # Set this value in the Render dashboard, marked as secret:
+      #   ConnectionStrings__Default =
+      #   Server=<host>,<port>;Database=LocationTrackerDb;User Id=<user>;Password=<pwd>;Encrypt=True;TrustServerCertificate=True
+      - key: ConnectionStrings__Default
+        sync: false

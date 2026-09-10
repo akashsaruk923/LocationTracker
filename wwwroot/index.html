@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Location Check-in</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center;
+    font: 16px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    background: #0f172a; color: #e2e8f0; padding: 24px;
+  }
+  .card {
+    width: 100%; max-width: 420px; background: #1e293b; border: 1px solid #334155;
+    border-radius: 16px; padding: 28px; text-align: center;
+    box-shadow: 0 20px 45px -20px rgba(0,0,0,.6);
+  }
+  h1 { margin: 0 0 6px; font-size: 1.35rem; }
+  p.sub { margin: 0 0 22px; color: #94a3b8; font-size: .95rem; }
+  button {
+    width: 100%; padding: 13px 18px; font-size: 1rem; font-weight: 600;
+    border: 0; border-radius: 10px; cursor: pointer;
+    background: #38bdf8; color: #082f49; transition: opacity .15s;
+  }
+  button:disabled { opacity: .55; cursor: default; }
+  .status {
+    margin-top: 18px; padding: 12px 14px; border-radius: 10px; font-size: .9rem;
+    display: none; white-space: pre-wrap; word-break: break-word;
+  }
+  .status.show { display: block; }
+  .status.ok { background: #052e1b; color: #86efac; border: 1px solid #14532d; }
+  .status.err { background: #3f1d1d; color: #fca5a5; border: 1px solid #7f1d1d; }
+  .status.info { background: #0c2740; color: #7dd3fc; border: 1px solid #155e75; }
+  .coords { margin-top: 14px; font-size: .85rem; color: #cbd5e1; }
+  .coords span { color: #f8fafc; font-weight: 600; }
+  footer { margin-top: 20px; font-size: .75rem; color: #64748b; }
+</style>
+</head>
+<body>
+  <main class="card">
+    <h1>📍 Location Check-in</h1>
+    <p class="sub">Tap the button and allow location access. Your current position is saved once.</p>
+    <button id="shareBtn">Share my location</button>
+    <div id="status" class="status"></div>
+    <div id="coords" class="coords"></div>
+    <footer>We only read your location after you allow it in the browser prompt.</footer>
+  </main>
+
+<script>
+(function () {
+  const btn = document.getElementById('shareBtn');
+  const statusEl = document.getElementById('status');
+  const coordsEl = document.getElementById('coords');
+
+  const CLIENT_KEY = 'location-tracker-client-id';
+  function clientId() {
+    let id = null;
+    try { id = localStorage.getItem(CLIENT_KEY); } catch (_) {}
+    if (!id) {
+      id = (crypto.randomUUID && crypto.randomUUID()) ||
+           (Date.now().toString(36) + Math.random().toString(36).slice(2));
+      try { localStorage.setItem(CLIENT_KEY, id); } catch (_) {}
+    }
+    return id;
+  }
+
+  function setStatus(kind, msg) {
+    statusEl.className = 'status show ' + kind;
+    statusEl.textContent = msg;
+  }
+
+  async function send(pos) {
+    const c = pos.coords;
+    coordsEl.innerHTML =
+      'Latitude: <span>' + c.latitude.toFixed(6) + '</span> &nbsp; ' +
+      'Longitude: <span>' + c.longitude.toFixed(6) + '</span><br>' +
+      'Accuracy: <span>±' + Math.round(c.accuracy) + ' m</span>';
+
+    const payload = {
+      clientId: clientId(),
+      latitude: c.latitude,
+      longitude: c.longitude,
+      accuracyMeters: c.accuracy ?? null,
+      altitudeMeters: c.altitude ?? null,
+      altitudeAccuracyMeters: c.altitudeAccuracy ?? null,
+      heading: (c.heading != null && !Number.isNaN(c.heading)) ? c.heading : null,
+      speedMetersPerSecond: (c.speed != null && !Number.isNaN(c.speed)) ? c.speed : null,
+      deviceTimestampMs: pos.timestamp ?? null
+    };
+
+    setStatus('info', 'Saving…');
+    try {
+      const res = await fetch('/api/locations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error('Server responded ' + res.status);
+      setStatus('ok', '✅ Location saved. Thank you!');
+    } catch (e) {
+      setStatus('err', '❌ Could not save location.\n' + e.message);
+      btn.disabled = false;
+      btn.textContent = 'Try again';
+    }
+  }
+
+  function onError(err) {
+    const map = {
+      1: 'You denied location access. Enable it in your browser settings to continue.',
+      2: 'Your location is currently unavailable. Try again in a moment.',
+      3: 'Timed out while getting your location. Try again.'
+    };
+    setStatus('err', '❌ ' + (map[err.code] || err.message));
+    btn.disabled = false;
+    btn.textContent = 'Try again';
+  }
+
+  btn.addEventListener('click', function () {
+    if (!('geolocation' in navigator)) {
+      setStatus('err', 'This browser does not support geolocation.');
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = 'Requesting permission…';
+    setStatus('info', 'Waiting for you to allow location access…');
+    navigator.geolocation.getCurrentPosition(send, onError, {
+      enableHighAccuracy: true,
+      timeout: 15000,
+      maximumAge: 0
+    });
+  });
+})();
+</script>
+</body>
+</html>

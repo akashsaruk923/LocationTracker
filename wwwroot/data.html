@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Location Tracker - Data</title>
+<style>
+  :root { color-scheme: light dark; --bg:#0f172a; --card:#1e293b; --line:#334155; --fg:#e2e8f0; --dim:#94a3b8; --accent:#38bdf8; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif; }
+  header { padding:16px 20px; border-bottom:1px solid var(--line); display:flex; gap:16px; align-items:baseline; flex-wrap:wrap; position:sticky; top:0; background:var(--bg); }
+  h1 { margin:0; font-size:1.1rem; }
+  .meta { color:var(--dim); font-size:.85rem; }
+  .wrap { overflow-x:auto; padding:12px; }
+  table { border-collapse:collapse; width:100%; min-width:820px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); white-space:nowrap; vertical-align:top; }
+  th { color:var(--dim); font-weight:600; font-size:.8rem; text-transform:uppercase; letter-spacing:.03em; position:sticky; top:57px; background:var(--bg); }
+  tr:hover td { background:rgba(56,189,248,.06); }
+  .src { display:inline-block; padding:1px 7px; border-radius:99px; font-size:.75rem; font-weight:600; }
+  .src.gps { background:#052e1b; color:#86efac; }
+  .src.ip { background:#3a2a0c; color:#fcd34d; }
+  a { color:var(--accent); }
+  .addr { white-space:normal; max-width:340px; color:var(--dim); font-size:.85rem; }
+  .empty, .err { padding:40px 20px; text-align:center; color:var(--dim); }
+  .err { color:#fca5a5; }
+  button { background:var(--accent); color:#082f49; border:0; border-radius:8px; padding:6px 12px; font-weight:600; cursor:pointer; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>📍 Location Tracker</h1>
+    <span class="meta" id="meta">loading…</span>
+    <span style="flex:1"></span>
+    <button id="refresh">Refresh</button>
+    <label class="meta"><input type="checkbox" id="auto" checked> auto 15s</label>
+  </header>
+  <div class="wrap" id="wrap"><div class="empty">loading…</div></div>
+
+<script>
+(function () {
+  const params = new URLSearchParams(location.search);
+  const key = params.get('key') || '';
+  const wrap = document.getElementById('wrap');
+  const meta = document.getElementById('meta');
+  let timer = null;
+
+  function esc(s) { return (s ?? '').toString().replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+  function row(r) {
+    const maps = r.googleMapsUrl ? `<a href="${esc(r.googleMapsUrl)}" target="_blank" rel="noopener">map</a>` : '';
+    const acc = r.accuracyMeters != null ? '±' + Math.round(r.accuracyMeters) + ' m' : '';
+    const ts = (r.createdAtIst || '').replace('T', ' ').slice(0, 19);
+    return `<tr>
+      <td>${r.id}</td>
+      <td><span class="src ${esc(r.source)}">${esc(r.source)}</span></td>
+      <td><b>${esc(r.village) || '—'}</b></td>
+      <td>${esc(r.city) || '—'}</td>
+      <td>${esc(r.district) || '—'}</td>
+      <td>${esc(r.region) || '—'}</td>
+      <td>${esc(r.postcode) || ''}</td>
+      <td>${r.latitude != null ? r.latitude.toFixed(5) + ', ' + r.longitude.toFixed(5) : '—'}</td>
+      <td>${acc}</td>
+      <td>${maps}</td>
+      <td>${esc(ts)}</td>
+      <td class="addr">${esc(r.address) || ''}</td>
+    </tr>`;
+  }
+
+  async function load() {
+    try {
+      const res = await fetch('/api/recent?key=' + encodeURIComponent(key));
+      if (res.status === 401) { wrap.innerHTML = '<div class="err">Wrong or missing ?key= in the URL.</div>'; meta.textContent = ''; return; }
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const rows = await res.json();
+      meta.textContent = rows.length + ' rows · ' + new Date().toLocaleTimeString();
+      if (!rows.length) { wrap.innerHTML = '<div class="empty">No locations recorded yet.</div>'; return; }
+      wrap.innerHTML = `<table><thead><tr>
+        <th>ID</th><th>Src</th><th>Village / Area</th><th>City</th><th>District</th><th>State</th>
+        <th>PIN</th><th>Lat, Long</th><th>Acc</th><th>Map</th><th>Time (IST)</th><th>Full address</th>
+      </tr></thead><tbody>${rows.map(row).join('')}</tbody></table>`;
+    } catch (e) {
+      wrap.innerHTML = '<div class="err">' + esc(e.message) + '</div>';
+    }
+  }
+
+  function setAuto(on) {
+    if (timer) { clearInterval(timer); timer = null; }
+    if (on) timer = setInterval(load, 15000);
+  }
+
+  document.getElementById('refresh').addEventListener('click', load);
+  document.getElementById('auto').addEventListener('change', e => setAuto(e.target.checked));
+  load();
+  setAuto(true);
+})();
+</script>
+</body>
+</html>

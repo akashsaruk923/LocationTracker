@@ -167,16 +167,18 @@ app.MapPost("/api/locations", async (LocationPingRequest req, HttpContext ctx, A
         new { ping.Id, ping.Village, ping.City, ping.District, ping.Region, ping.Address, ping.CreatedAtIst, ping.GoogleMapsUrl });
 });
 
-// Quick read-back to verify what's stored. Protected by the ADMIN_KEY env var.
-app.MapGet("/api/recent", async (HttpContext ctx, AppDbContext db, IConfiguration cfg) =>
+// Viewer key: ADMIN_KEY env var, else a baked-in default so /data works out of
+// the box. Set ADMIN_KEY in the host dashboard to lock it down.
+var viewerKey = builder.Configuration["ADMIN_KEY"] ?? "akash-loc-view-9271";
+
+// Rows as JSON for the /data dashboard (and quick checks). ?key=<viewerKey>.
+app.MapGet("/api/recent", async (HttpContext ctx, AppDbContext db) =>
 {
-    var expected = cfg["ADMIN_KEY"];
-    if (string.IsNullOrEmpty(expected) || ctx.Request.Query["key"] != expected)
-        return Results.Unauthorized();
+    if (ctx.Request.Query["key"] != viewerKey) return Results.Unauthorized();
 
     var rows = await db.LocationPings
         .OrderByDescending(p => p.Id)
-        .Take(50)
+        .Take(200)
         .Select(p => new
         {
             p.Id, p.Source, p.ClientId,
@@ -189,6 +191,10 @@ app.MapGet("/api/recent", async (HttpContext ctx, AppDbContext db, IConfiguratio
 
     return Results.Ok(rows);
 });
+
+// Friendly alias: /data -> the dashboard page (keeps the ?key=).
+app.MapGet("/data", (HttpContext ctx) =>
+    Results.Redirect($"/data.html{ctx.Request.QueryString}"));
 
 app.Run();
 

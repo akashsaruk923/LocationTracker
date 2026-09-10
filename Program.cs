@@ -25,7 +25,7 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddCors(options => options.AddDefaultPolicy(p =>
     p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
 
-builder.Services.AddHttpClient<IpGeoLookup>(c => c.Timeout = TimeSpan.FromSeconds(4));
+builder.Services.AddHttpClient<GeoLookup>(c => c.Timeout = TimeSpan.FromSeconds(5));
 
 var app = builder.Build();
 
@@ -67,10 +67,10 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok", timeUtc = DateTimeOf
 // Called by the page the instant it loads. Saves an approximate, city-level
 // location derived from the visitor's IP - no permission needed, so something
 // is always recorded even if the visitor never allows precise location.
-app.MapPost("/api/visit", async (VisitRequest req, HttpContext ctx, AppDbContext db, IpGeoLookup geo) =>
+app.MapPost("/api/visit", async (VisitRequest req, HttpContext ctx, AppDbContext db, GeoLookup geo) =>
 {
     var ip = ClientIp(ctx);
-    var g = await geo.LookupAsync(ip, ctx.RequestAborted);
+    var g = await geo.LookupByIpAsync(ip, ctx.RequestAborted);
 
     var ping = new LocationPing
     {
@@ -96,7 +96,7 @@ app.MapPost("/api/visit", async (VisitRequest req, HttpContext ctx, AppDbContext
 });
 
 // Called after the visitor allows the browser location prompt. Precise position.
-app.MapPost("/api/locations", async (LocationPingRequest req, HttpContext ctx, AppDbContext db, IpGeoLookup geo) =>
+app.MapPost("/api/locations", async (LocationPingRequest req, HttpContext ctx, AppDbContext db, GeoLookup geo) =>
 {
     var validation = new List<string>();
     if (string.IsNullOrWhiteSpace(req.ClientId)) validation.Add("clientId is required");
@@ -106,7 +106,10 @@ app.MapPost("/api/locations", async (LocationPingRequest req, HttpContext ctx, A
         new Dictionary<string, string[]> { ["payload"] = validation.ToArray() });
 
     var ip = ClientIp(ctx);
-    var g = await geo.LookupAsync(ip, ctx.RequestAborted);
+    // City/state from the ACTUAL coordinates - not the IP - so the "gps" row is correct.
+    var g = await geo.ReverseGeocodeAsync(req.Latitude, req.Longitude, ctx.RequestAborted);
+    if (!g.HasPlace)
+        g = await geo.LookupByIpAsync(ip, ctx.RequestAborted);
 
     var ping = new LocationPing
     {

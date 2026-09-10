@@ -79,9 +79,13 @@ app.MapPost("/api/visit", async (VisitRequest req, HttpContext ctx, AppDbContext
         Latitude = g.Latitude,
         Longitude = g.Longitude,
         GoogleMapsUrl = MapsUrl(g.Latitude, g.Longitude),
+        Village = g.Village,
         City = g.City,
+        District = g.District,
         Region = g.Region,
         Country = g.Country,
+        Postcode = g.Postcode,
+        Address = g.Address,
         UserAgent = UserAgent(ctx),
         IpAddress = ip,
         CreatedAtUtc = DateTimeOffset.UtcNow,
@@ -92,7 +96,7 @@ app.MapPost("/api/visit", async (VisitRequest req, HttpContext ctx, AppDbContext
     await db.SaveChangesAsync();
 
     return Results.Created($"/api/locations/{ping.Id}",
-        new { ping.Id, ping.Source, ping.Latitude, ping.Longitude, ping.City, ping.Country, ping.GoogleMapsUrl, ping.CreatedAtIst });
+        new { ping.Id, ping.Source, ping.Latitude, ping.Longitude, ping.Village, ping.City, ping.Country, ping.GoogleMapsUrl, ping.CreatedAtIst });
 });
 
 // Called after the visitor allows the browser location prompt. Precise position.
@@ -129,9 +133,13 @@ app.MapPost("/api/locations", async (LocationPingRequest req, HttpContext ctx, A
         DeviceTimestampIst = req.DeviceTimestampMs is { } ms2
             ? ToIst(DateTimeOffset.FromUnixTimeMilliseconds(ms2))
             : null,
+        Village = g.Village,
         City = g.City,
+        District = g.District,
         Region = g.Region,
         Country = g.Country,
+        Postcode = g.Postcode,
+        Address = g.Address,
         UserAgent = UserAgent(ctx),
         IpAddress = ip,
         CreatedAtUtc = DateTimeOffset.UtcNow,
@@ -141,7 +149,8 @@ app.MapPost("/api/locations", async (LocationPingRequest req, HttpContext ctx, A
     db.LocationPings.Add(ping);
     await db.SaveChangesAsync();
 
-    return Results.Created($"/api/locations/{ping.Id}", new { ping.Id, ping.CreatedAtIst, ping.GoogleMapsUrl });
+    return Results.Created($"/api/locations/{ping.Id}",
+        new { ping.Id, ping.Village, ping.City, ping.District, ping.Region, ping.Address, ping.CreatedAtIst, ping.GoogleMapsUrl });
 });
 
 // Quick read-back to verify what's stored. Protected by the ADMIN_KEY env var.
@@ -158,7 +167,7 @@ app.MapGet("/api/recent", async (HttpContext ctx, AppDbContext db, IConfiguratio
         {
             p.Id, p.Source, p.ClientId,
             p.Latitude, p.Longitude, p.GoogleMapsUrl,
-            p.City, p.Region, p.Country,
+            p.Village, p.City, p.District, p.Region, p.Country, p.Postcode, p.Address,
             p.AccuracyMeters, p.IpAddress,
             p.CreatedAtIst, p.DeviceTimestampIst,
         })

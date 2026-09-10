@@ -37,10 +37,18 @@ public class LocationPing
     /// <summary>Same moment as <see cref="DeviceTimestampUtc"/>, as India Standard Time (UTC+5:30) wall-clock.</summary>
     public DateTime? DeviceTimestampIst { get; set; }
 
-    // Filled from the IP lookup (present on "ip" rows, sometimes on "gps" rows too).
+    // Place names. For "gps" rows these come from reverse-geocoding the exact
+    // coordinates (OpenStreetMap / Nominatim), so Village is populated in rural
+    // areas. For "ip" rows only City/Region/Country (from the IP) are available.
+    public string? Village { get; set; }
     public string? City { get; set; }
+    public string? District { get; set; }
     public string? Region { get; set; }
     public string? Country { get; set; }
+    public string? Postcode { get; set; }
+
+    /// <summary>Full human-readable address line from the reverse geocoder.</summary>
+    public string? Address { get; set; }
 
     public string? UserAgent { get; set; }
     public string? IpAddress { get; set; }

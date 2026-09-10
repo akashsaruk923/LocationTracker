@@ -3,6 +3,7 @@ using LocationTracker.Api.Dtos;
 using LocationTracker.Api.Models;
 using LocationTracker.Api.Services;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -33,7 +34,20 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    db.Database.Migrate();
+    var log = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+    try
+    {
+        db.Database.Migrate();
+    }
+    catch (PostgresException ex) when (ex.SqlState is "42P07" or "42P01" or "42710")
+    {
+        // Schema left over from an earlier, incompatible migration set (this
+        // project reset its migrations when switching DB providers). The DB holds
+        // only this app's data, so reset the public schema and apply cleanly.
+        log.LogWarning(ex, "Incompatible existing schema - resetting public schema and re-migrating");
+        db.Database.ExecuteSqlRaw("DROP SCHEMA public CASCADE; CREATE SCHEMA public;");
+        db.Database.Migrate();
+    }
 }
 
 app.UseCors();

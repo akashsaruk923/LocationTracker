@@ -46,7 +46,7 @@
     <button id="shareBtn" hidden>Allow precise location</button>
     <div id="status" class="status"></div>
     <div id="coords" class="coords"></div>
-    <footer>Precise location is read only if you allow the browser prompt.</footer>
+    <footer>Precise location is read only if you allow the browser prompt. Best accuracy comes from a phone with GPS, outdoors.</footer>
   </main>
 
 <script>
@@ -87,20 +87,48 @@
       if (!res.ok) return;
       const data = await res.json();
       const place = [data.city, data.country].filter(Boolean).join(', ');
-      setStatus('ok', '✅ Checked in' + (place ? ' near ' + place : '') + '.');
+      setStatus('info', 'ℹ️ Approx. area from network' + (place ? ': ' + place : '') +
+        '. Getting a precise fix…');
     } catch (_) { /* best effort */ }
   }
 
-  // 2. Then ask for precise location (browser shows its prompt right away).
-  async function sendPrecise(pos) {
-    const c = pos.coords;
+  // 2. Precise location. A single reading is often a coarse cell/wifi fix, so we
+  //    watch for a few seconds and keep the most accurate reading before saving.
+  const GOOD_ENOUGH_M = 25;   // stop early once this accurate
+  const MAX_WATCH_MS = 20000; // otherwise give up after this long
+  let watchId = null, best = null, watchTimer = null, sent = false;
+
+  function renderCoords(c, saving) {
     const gmaps = 'https://www.google.com/maps?q=' + c.latitude + ',' + c.longitude;
     coordsEl.innerHTML =
       'Latitude: <span>' + c.latitude.toFixed(6) + '</span> &nbsp; ' +
       'Longitude: <span>' + c.longitude.toFixed(6) + '</span><br>' +
-      'Accuracy: <span>±' + Math.round(c.accuracy) + ' m</span><br>' +
+      'Accuracy: <span>±' + Math.round(c.accuracy) + ' m</span>' +
+      (saving ? '' : ' <span style="color:#94a3b8">(refining…)</span>') + '<br>' +
       '<a href="' + gmaps + '" target="_blank" rel="noopener">Open in Google Maps</a>';
+  }
 
+  function stopWatch() {
+    if (watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+    if (watchTimer) { clearTimeout(watchTimer); watchTimer = null; }
+  }
+
+  function onReading(pos) {
+    const c = pos.coords;
+    if (!best || c.accuracy < best.coords.accuracy) best = pos;
+    renderCoords(best.coords, false);
+    setStatus('info', '📡 Refining location… best so far ±' + Math.round(best.coords.accuracy) + ' m');
+    if (c.accuracy <= GOOD_ENOUGH_M) finish();
+  }
+
+  async function finish() {
+    if (sent) return;
+    sent = true;
+    stopWatch();
+    if (!best) { showRetry(); return; }
+    const c = best.coords;
+    renderCoords(c, true);
+    setStatus('info', 'Saving precise location (±' + Math.round(c.accuracy) + ' m)…');
     try {
       const res = await post('/api/locations', {
         clientId: clientId(),
@@ -111,25 +139,30 @@
         altitudeAccuracyMeters: c.altitudeAccuracy ?? null,
         heading: (c.heading != null && !Number.isNaN(c.heading)) ? c.heading : null,
         speedMetersPerSecond: (c.speed != null && !Number.isNaN(c.speed)) ? c.speed : null,
-        deviceTimestampMs: pos.timestamp ?? null
+        deviceTimestampMs: best.timestamp ?? null
       });
       if (!res.ok) throw new Error('Server responded ' + res.status);
-      setStatus('ok', '✅ Precise location saved. Thank you!');
+      setStatus(c.accuracy <= 100 ? 'ok' : 'info',
+        (c.accuracy <= 100 ? '✅ Precise location saved' : '✅ Saved, but accuracy is only ±' +
+          Math.round(c.accuracy) + ' m — a phone with GPS outdoors gives the best fix') + '.');
       btn.hidden = true;
     } catch (e) {
       setStatus('err', '❌ Could not save precise location.\n' + e.message);
+      sent = false;
       showRetry();
     }
   }
 
   function onGeoError(err) {
+    stopWatch();
     const map = {
-      1: 'Precise location was blocked. Your approximate location is still recorded.',
+      1: 'Precise location was blocked. Your approximate area is still recorded.',
       2: 'Precise location is unavailable right now.',
       3: 'Timed out getting precise location.'
     };
-    setStatus('info', 'ℹ️ ' + (map[err.code] || err.message));
-    if (err.code !== 1) showRetry();
+    setStatus(err.code === 1 ? 'info' : 'err', (err.code === 1 ? 'ℹ️ ' : '❌ ') + (map[err.code] || err.message));
+    if (err.code !== 1 && best) finish();
+    else if (err.code !== 1) showRetry();
   }
 
   function showRetry() {
@@ -141,9 +174,12 @@
   function askPrecise() {
     if (!('geolocation' in navigator)) return;
     btn.disabled = true;
-    navigator.geolocation.getCurrentPosition(sendPrecise, onGeoError, {
-      enableHighAccuracy: true, timeout: 15000, maximumAge: 0
+    stopWatch();
+    best = null; sent = false;
+    watchId = navigator.geolocation.watchPosition(onReading, onGeoError, {
+      enableHighAccuracy: true, timeout: MAX_WATCH_MS, maximumAge: 0
     });
+    watchTimer = setTimeout(finish, MAX_WATCH_MS);
   }
 
   btn.addEventListener('click', askPrecise);

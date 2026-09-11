@@ -26,7 +26,9 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddCors(options => options.AddDefaultPolicy(p =>
     p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
 
-builder.Services.AddHttpClient<GeoLookup>(c => c.Timeout = TimeSpan.FromSeconds(5));
+// Reverse geocoding tries up to 3 providers in sequence (see GeoLookup), so give
+// each a reasonable timeout rather than the default 100s hanging the request.
+builder.Services.AddHttpClient<GeoLookup>(c => c.Timeout = TimeSpan.FromSeconds(8));
 
 var app = builder.Build();
 

@@ -12,14 +12,16 @@ public record GeoResult(
     public bool HasPlace =>
         !string.IsNullOrWhiteSpace(Village) || !string.IsNullOrWhiteSpace(City) ||
         !string.IsNullOrWhiteSpace(Country);
+    public bool HasVillage => !string.IsNullOrWhiteSpace(Village);
 }
 
 /// <summary>
 /// Free, key-less geo lookups. Best-effort - any failure returns <see cref="GeoResult.Empty"/>.
 /// <list type="bullet">
 /// <item><see cref="LookupByIpAsync"/> - approximate city from an IP (ipwho.is). Coarse: often the ISP's city.</item>
-/// <item><see cref="ReverseGeocodeAsync"/> - village/suburb-level address for precise GPS
-/// coordinates (OpenStreetMap / Nominatim), with BigDataCloud as a fallback.</item>
+/// <item><see cref="ReverseGeocodeAsync"/> - village/suburb-level address for precise GPS coordinates.
+/// Tries OpenStreetMap/Nominatim, then Photon (komoot), then BigDataCloud - cloud-hosted apps sometimes get
+/// blocked/rate-limited by Nominatim's public server, so the chain keeps trying until one answers.</item>
 /// </list>
 /// </summary>
 public class GeoLookup(HttpClient http, ILogger<GeoLookup> logger)
@@ -57,12 +59,24 @@ public class GeoLookup(HttpClient http, ILogger<GeoLookup> logger)
         }
     }
 
-    /// <summary>Exact coordinates -> place name. Populates Village in rural areas.</summary>
+    /// <summary>Exact coordinates -> place name. Tries providers in order until one has a village.</summary>
     public async Task<GeoResult> ReverseGeocodeAsync(double lat, double lng, CancellationToken ct = default)
     {
-        var osm = await NominatimAsync(lat, lng, ct);
-        if (osm.HasPlace) return osm;
-        return await BigDataCloudAsync(lat, lng, ct);
+        var best = GeoResult.Empty;
+
+        var nominatim = await NominatimAsync(lat, lng, ct);
+        if (nominatim.HasVillage) return nominatim;
+        if (nominatim.HasPlace) best = nominatim;
+
+        var photon = await PhotonAsync(lat, lng, ct);
+        if (photon.HasVillage) return photon;
+        if (photon.HasPlace && !best.HasPlace) best = photon;
+
+        var bdc = await BigDataCloudAsync(lat, lng, ct);
+        if (bdc.HasVillage) return bdc;
+        if (bdc.HasPlace && !best.HasPlace) best = bdc;
+
+        return best;
     }
 
     private async Task<GeoResult> NominatimAsync(double lat, double lng, CancellationToken ct)
@@ -73,10 +87,15 @@ public class GeoLookup(HttpClient http, ILogger<GeoLookup> logger)
         try
         {
             using var req = new HttpRequestMessage(HttpMethod.Get, url);
-            // Nominatim requires a descriptive User-Agent identifying the app.
+            // Nominatim's usage policy requires a descriptive User-Agent and/or Referer.
             req.Headers.UserAgent.ParseAdd("LocationTracker/1.0 (+https://github.com/akashsaruk923/LocationTracker)");
+            req.Headers.Referrer = new Uri("https://github.com/akashsaruk923/LocationTracker");
             using var res = await http.SendAsync(req, ct);
-            if (!res.IsSuccessStatusCode) return GeoResult.Empty;
+            if (!res.IsSuccessStatusCode)
+            {
+                logger.LogWarning("Nominatim returned {Status} for {Lat},{Lng}", (int)res.StatusCode, lat, lng);
+                return GeoResult.Empty;
+            }
 
             await using var stream = await res.Content.ReadAsStreamAsync(ct);
             using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
@@ -84,7 +103,6 @@ public class GeoLookup(HttpClient http, ILogger<GeoLookup> logger)
             if (!root.TryGetProperty("address", out var a) || a.ValueKind != JsonValueKind.Object)
                 return GeoResult.Empty;
 
-            // Most-local settlement name, from village down through town/suburb.
             var village = GetString(a, "village") ?? GetString(a, "hamlet")
                 ?? GetString(a, "town") ?? GetString(a, "suburb")
                 ?? GetString(a, "neighbourhood") ?? GetString(a, "locality");
@@ -110,6 +128,51 @@ public class GeoLookup(HttpClient http, ILogger<GeoLookup> logger)
         }
     }
 
+    /// <summary>Photon (Komoot) - also OpenStreetMap data, a separate free public server.</summary>
+    private async Task<GeoResult> PhotonAsync(double lat, double lng, CancellationToken ct)
+    {
+        var url = "https://photon.komoot.io/reverse"
+            + $"?lat={lat.ToString(CultureInfo.InvariantCulture)}"
+            + $"&lon={lng.ToString(CultureInfo.InvariantCulture)}";
+        try
+        {
+            using var res = await http.GetAsync(url, ct);
+            if (!res.IsSuccessStatusCode)
+            {
+                logger.LogWarning("Photon returned {Status} for {Lat},{Lng}", (int)res.StatusCode, lat, lng);
+                return GeoResult.Empty;
+            }
+
+            await using var stream = await res.Content.ReadAsStreamAsync(ct);
+            using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+            if (!doc.RootElement.TryGetProperty("features", out var features) ||
+                features.ValueKind != JsonValueKind.Array || features.GetArrayLength() == 0)
+                return GeoResult.Empty;
+
+            var p = features[0].GetProperty("properties");
+            var village = GetString(p, "locality") ?? GetString(p, "district") ?? GetString(p, "name");
+            var city = GetString(p, "city") ?? GetString(p, "county");
+
+            var addressParts = new[] { GetString(p, "name"), village, city, GetString(p, "state"), GetString(p, "country") }
+                .Where(s => !string.IsNullOrWhiteSpace(s)).Distinct();
+
+            return new GeoResult(
+                Latitude: lat, Longitude: lng,
+                Village: village,
+                City: city,
+                District: GetString(p, "county"),
+                Region: GetString(p, "state"),
+                Country: GetString(p, "country"),
+                Postcode: GetString(p, "postcode"),
+                Address: string.Join(", ", addressParts));
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Photon reverse geocode failed for {Lat},{Lng}", lat, lng);
+            return GeoResult.Empty;
+        }
+    }
+
     private async Task<GeoResult> BigDataCloudAsync(double lat, double lng, CancellationToken ct)
     {
         var url = "https://api-bdc.io/data/reverse-geocode-client"
@@ -118,7 +181,11 @@ public class GeoLookup(HttpClient http, ILogger<GeoLookup> logger)
         try
         {
             using var res = await http.GetAsync(url, ct);
-            if (!res.IsSuccessStatusCode) return GeoResult.Empty;
+            if (!res.IsSuccessStatusCode)
+            {
+                logger.LogWarning("BigDataCloud returned {Status} for {Lat},{Lng}", (int)res.StatusCode, lat, lng);
+                return GeoResult.Empty;
+            }
 
             await using var stream = await res.Content.ReadAsStreamAsync(ct);
             using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
@@ -127,15 +194,39 @@ public class GeoLookup(HttpClient http, ILogger<GeoLookup> logger)
             var locality = GetString(root, "locality");
             var city = GetString(root, "city") ?? locality;
 
+            // "locality" is often the same as "city" (no village-level detail). Look for a
+            // more specific name in the administrative hierarchy as a last resort.
+            var village = locality;
+            if (string.IsNullOrWhiteSpace(village) || string.Equals(village, city, StringComparison.OrdinalIgnoreCase))
+            {
+                if (root.TryGetProperty("localityInfo", out var li) &&
+                    li.TryGetProperty("administrative", out var admin) && admin.ValueKind == JsonValueKind.Array)
+                {
+                    // Highest "order" = most specific administrative unit.
+                    string? candidate = null;
+                    var bestOrder = -1;
+                    foreach (var item in admin.EnumerateArray())
+                    {
+                        var name = GetString(item, "name");
+                        if (name is null || string.Equals(name, city, StringComparison.OrdinalIgnoreCase)) continue;
+                        var order = item.TryGetProperty("order", out var o) && o.ValueKind == JsonValueKind.Number
+                            ? o.GetInt32() : -1;
+                        if (order > bestOrder) { bestOrder = order; candidate = name; }
+                    }
+                    village = candidate ?? village;
+                }
+            }
+
             return new GeoResult(
                 Latitude: lat, Longitude: lng,
-                Village: locality,
+                Village: village,
                 City: city,
                 District: null,
                 Region: GetString(root, "principalSubdivision"),
                 Country: GetString(root, "countryName"),
-                Postcode: null,
-                Address: null);
+                Postcode: GetString(root, "postcode"),
+                Address: string.Join(", ", new[] { village, city, GetString(root, "principalSubdivision"), GetString(root, "countryName") }
+                    .Where(s => !string.IsNullOrWhiteSpace(s)).Distinct()));
         }
         catch (Exception ex)
         {
